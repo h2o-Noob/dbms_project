@@ -1,0 +1,8 @@
+# file: requirements.txt
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+python-dotenv
+typing-extensions
+jsonschema
