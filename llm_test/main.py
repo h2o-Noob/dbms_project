@@ -8,12 +8,66 @@ from dotenv import load_dotenv
 load_dotenv()
 from .llm_client import LLMClient
 from .transforms import apply_sequence, ra_equal
+import json
 
 
 app = FastAPI()
 hf = LLMClient()  # will now use GEMINI_API_KEY from .env
 
-VOCAB = ["FilterProjectTranspose","JoinCommute","ProjectPushdown"]
+VOCAB = [
+    # Existing rules
+    "FilterProjectTranspose",
+    "JoinCommute",
+    "ProjectPushdown",
+    "FilterPushdown",
+    "AddFilter",
+    "RemoveFilter",
+    "JoinReorder",
+    "ProjectionMerge",
+    "FilterMerge",
+    "RenameColumns",
+    "AggregatePushdown",
+
+    # Additional Calcite rules
+    # Filter transformations
+    "FilterJoinRule",
+    "FilterSortTransposeRule",
+    "FilterSampleTransposeRule",
+    "FilterSetOpTransposeRule",
+
+    # Project transformations
+    "ProjectJoinTransposeRule",
+    "ProjectMergeRule",
+    "ProjectRemoveRule",
+    "ProjectTableScanRule",
+    "ProjectSetOpTransposeRule",
+
+    # Join transformations
+    "JoinToMultiJoinRule",
+    "JoinToSemiJoinRule",
+    "JoinToCorrelateRule",
+    "JoinToUnionRule",
+
+    # Aggregate transformations
+    "AggregateJoinTransposeRule",
+    "AggregateFilterTransposeRule",
+    "AggregateExpandDistinctAggregatesRule",
+    "AggregateExpandWithinDistinctRule",
+    "AggregateExtractProjectRule",
+
+    # Sort transformations
+    "SortProjectTransposeRule",
+    "SortRemoveRule",
+    "SortLimitTransposeRule",
+
+    # Miscellaneous transformations
+    "ProjectToWindowRule",
+    "WindowToProjectRule",
+    "FilterToCalcRule",
+    "CalcToWindowRule",
+    "UnionToDistinctRule"
+]
+
 
 class RATree(BaseModel):
     tree: Dict[str, Any]
@@ -22,42 +76,39 @@ class LLMRequest(BaseModel):
     source: Dict[str, Any]
     target: Dict[str, Any]
 
-@app.post("/suggest")
-async def suggest(req: LLMRequest):
+
+@app.post("/check_equivalence")
+async def check_equivalence(req: LLMRequest):
+    # 1. Quick equivalence check
+    if ra_equal(req.source, req.target):
+        return {
+            "potential_equivalence": "yes",
+            "trace": [],
+            "llm": {"sequence": [], "score": 1.0, "notes": "SOURCE_RA and TARGET_RA are identical."}
+        }
+
+    # 2. Ask LLM for a suggested transformation
     try:
-        resp = await hf.ask(req.source, req.target, VOCAB)
+        llm_resp_text = await hf.ask(req.source, req.target, VOCAB)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    if resp == "no_output":
-        resp = "LLM returned no output"
+    if llm_resp_text == "no_output":
+        llm_resp_text = "LLM returned no output"
 
-    return {"llm": resp}
-
-@app.post("/verify")
-async def verify(req: LLMRequest, llm_proposal: Dict[str, Any] = None):
-    if llm_proposal is None:
-        return {"error":"llm_proposal_missing"}
-    seq = llm_proposal.get("sequence",[])
-    r = apply_sequence(req.source, seq, VOCAB)
-    if not r.get("ok"):
-        return {"verified": False, "reason": r.get("error"), "trace": r.get("trace")}
-    final = r.get("final")
-    eq = ra_equal(final, req.target)
-    return {"verified": bool(eq), "final": final, "target": req.target, "trace": r.get("trace")}
-
-@app.post("/check")
-async def check(req: LLMRequest):
+    # 3. Parse LLM JSON safely
     try:
-        llm_resp = await hf.ask(req.source, req.target, VOCAB)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        parsed = json.loads(llm_resp_text.strip("```json").strip("```"))
+    except Exception:
+        return {"llm": llm_resp_text, "potential_equivalence": "no", "trace": "invalid LLM JSON"}
 
-    if llm_resp == "no_output":
-        llm_resp = "LLM returned no output"
+    # 4. Return LLM suggestion with potential equivalence flag
+    return {
+        "llm": parsed,
+        "potential_equivalence": "yes" if parsed.get("sequence") else "no",
+        "trace": [req.source]  # Keep original source RA as trace for context
+    }
 
-    # Skip sequence application since we are just returning raw LLM output
-    return {"llm": llm_resp, "verified": None, "final": None, "trace": None}
 
 
 if __name__ == "__main__":

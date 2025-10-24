@@ -1,0 +1,1 @@
+/Users/h2o_arindam/Desktop/dbms_project/llm//bin/gpt4all.app
