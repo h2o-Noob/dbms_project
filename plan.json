@@ -1,0 +1,32 @@
+[
+    {
+      "Plan": {
+        "Node Type": "HashAggregate",
+        "Strategy": "Hashed",
+        "Partial Mode": "Simple",
+        "Parallel Aware": false,
+        "Startup Cost": 10126.53,
+        "Total Cost": 10206.53,
+        "Plan Rows": 10000,
+        "Plan Width": 16,
+        "Group Key": ["l_orderkey"],
+        "Plans": [
+          {
+            "Node Type": "Seq Scan",
+            "Parent Relationship": "Outer",
+            "Relation Name": "lineitem",
+            "Alias": "lineitem",
+            "Startup Cost": 0.00,
+            "Total Cost": 10126.53,
+            "Plan Rows": 60175,
+            "Plan Width": 16,
+            "Filter": "(l_shipdate < '1995-03-15'::date)"
+          }
+        ]
+      },
+      "Planning Time": 0.315,
+      "Triggers": [],
+      "Execution Time": 1.947
+    }
+  ]
+  
