@@ -1,19 +1,26 @@
-# file: main.py
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Any, Dict, List
 import os
-from dotenv import load_dotenv
-load_dotenv()
-from .llm_client import LLMClient
-from .transforms import apply_sequence, ra_equal
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from typing import Any, Dict
 import json
+from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 
+from .llm_client import LLMClient
+from .transforms import ra_equal
+
+load_dotenv()
 
 app = FastAPI()
-hf = LLMClient()  # will now use GEMINI_API_KEY from .env
+hf = LLMClient()  # Uses GEMINI_API_KEY from .env
 
+# Serve frontend files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --------------------------
+# FULL VOCAB (all rules)
+# --------------------------
 VOCAB = [
     # Existing rules
     "FilterProjectTranspose",
@@ -68,48 +75,69 @@ VOCAB = [
     "UnionToDistinctRule"
 ]
 
-
-class RATree(BaseModel):
-    tree: Dict[str, Any]
-
 class LLMRequest(BaseModel):
     source: Dict[str, Any]
     target: Dict[str, Any]
 
+# ------------------------------------
+# FRONTEND ENTRY POINT (index.html)
+# ------------------------------------
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    with open("static/index.html") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
 
+# ------------------------------------
+# API: Check RA Equivalence
+# ------------------------------------
 @app.post("/check_equivalence")
 async def check_equivalence(req: LLMRequest):
-    # 1. Quick equivalence check
+
+    # 1. Quick check
     if ra_equal(req.source, req.target):
         return {
             "potential_equivalence": "yes",
             "trace": [],
-            "llm": {"sequence": [], "score": 1.0, "notes": "SOURCE_RA and TARGET_RA are identical."}
+            "llm": {
+                "sequence": [],
+                "score": 1.0,
+                "notes": "SOURCE_RA and TARGET_RA are identical."
+            }
         }
 
-    # 2. Ask LLM for a suggested transformation
+    # 2. Get LLM output
     try:
         llm_resp_text = await hf.ask(req.source, req.target, VOCAB)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    if llm_resp_text == "no_output":
-        llm_resp_text = "LLM returned no output"
+    if not llm_resp_text or llm_resp_text == "no_output":
+        return {
+            "potential_equivalence": "no",
+            "trace": [],
+            "llm": "LLM returned no output"
+        }
 
-    # 3. Parse LLM JSON safely
+    # 3. Safely clean model output
+    cleaned = (
+        llm_resp_text.replace("```json", "")
+                     .replace("```", "")
+                     .strip()
+    )
+
+    # 4. Parse JSON
     try:
-        parsed = json.loads(llm_resp_text.strip("```json").strip("```"))
+        parsed = json.loads(cleaned)
     except Exception:
-        return {"llm": llm_resp_text, "potential_equivalence": "no", "trace": "invalid LLM JSON"}
+        return {
+            "potential_equivalence": "no",
+            "trace": [],
+            "llm": cleaned,
+            "notes": "Invalid JSON from LLM"
+        }
 
-    # 4. Return LLM suggestion with potential equivalence flag
     return {
         "llm": parsed,
         "potential_equivalence": "yes" if parsed.get("sequence") else "no",
-        "trace": [req.source]  # Keep original source RA as trace for context
+        "trace": [req.source]
     }
-
-
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)
